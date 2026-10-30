@@ -174,3 +174,21 @@ def test_totals_preserve_numeric_strings():
     report = ga.normalize_report({'metricHeaders': [{'name': 'totalRevenue', 'type': 'TYPE_CURRENCY'}],
                                   'totals': [{'metricValues': [{'value': '1.2300001'}]}]})
     assert report['totals'][0]['metrics']['totalRevenue'] == '1.2300001'
+
+
+def test_pagination_adds_stable_tie_breakers_without_replacing_user_order(wire):
+    ordering = [{'metric': {'metricName': 'sessions'}, 'desc': True},
+                {'dimension': {'dimensionName': 'country'}, 'desc': True}]
+    ga.run_report(start_date='7daysAgo', end_date='yesterday', metrics=['sessions'],
+                  dimensions=['country', 'city'], order_bys=ordering)
+    actual = wire[0][1]['body']['orderBys']
+    assert actual == ordering + [{'dimension': {'dimensionName': 'city'}}]
+    assert len(ordering) == 2
+
+
+def test_default_pagination_orders_by_all_dimensions(wire):
+    ga.run_report(start_date='7daysAgo', end_date='yesterday', metrics=['sessions'],
+                  dimensions=['date', 'country'])
+    assert wire[0][1]['body']['orderBys'] == [
+        {'dimension': {'dimensionName': 'date'}}, {'dimension': {'dimensionName': 'country'}},
+    ]

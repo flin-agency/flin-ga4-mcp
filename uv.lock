@@ -485,7 +485,7 @@ requires-dist = [
     { name = "google-auth-httplib2", specifier = ">=0.2.0,<1" },
     { name = "google-auth-oauthlib", specifier = ">=1.2.0,<2" },
     { name = "httplib2", specifier = ">=0.22.0,<1" },
-    { name = "mcp", specifier = ">=1.12.0,<2" },
+    { name = "mcp", specifier = ">=1.30.0,<2" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
     { name = "tomli", marker = "python_full_version < '3.11' and extra == 'dev'", specifier = ">=2.0.1" },
     { name = "twine", marker = "extra == 'dev'", specifier = ">=6" },

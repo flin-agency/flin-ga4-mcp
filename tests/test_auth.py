@@ -262,9 +262,10 @@ def test_run_installed_app_flow_suppresses_stdout_authorization_prompt(
 
     class FakeInstalledAppFlow:
         @staticmethod
-        def from_client_config(client_config: dict[str, object], scopes: tuple[str, ...]) -> FakeFlow:
+        def from_client_config(client_config: dict[str, object], scopes: tuple[str, ...], **kwargs) -> FakeFlow:
             captured["client_config"] = client_config
             captured["scopes"] = scopes
+            captured["flow_options"] = kwargs
             return FakeFlow()
 
     monkeypatch.setattr(oauth_flow, "InstalledAppFlow", FakeInstalledAppFlow)
@@ -273,6 +274,9 @@ def test_run_installed_app_flow_suppresses_stdout_authorization_prompt(
 
     assert result == "credentials"
     assert captured["scopes"] == auth.GA4_SCOPES
+    assert captured["flow_options"]["autogenerate_code_verifier"] is True
+    assert captured["kwargs"]["host"] == "127.0.0.1"
+    assert captured["kwargs"]["timeout_seconds"] == 180
     assert captured["kwargs"]["prompt"] == "consent select_account"
     assert captured["kwargs"]["authorization_prompt_message"] == ""
 

@@ -79,7 +79,9 @@ def _run_installed_app_flow(settings: Settings) -> Any:
             "redirect_uris": ["http://localhost"],
         }
     }
-    flow = InstalledAppFlow.from_client_config(client_config, GA4_SCOPES)
+    flow = InstalledAppFlow.from_client_config(
+        client_config, GA4_SCOPES, autogenerate_code_verifier=True,
+    )
     return flow.run_local_server(
         host="127.0.0.1",
         port=settings.oauth_port,

@@ -38,6 +38,7 @@ opens Google sign-in in your browser. Complete it within three minutes. Subseque
 reuse/refresh the saved token. `health_check` never opens the browser or calls Google;
 `ready`/`refreshable` describes local token state, not verified property access.
 
+Browser OAuth explicitly enables PKCE and binds the callback to the loopback interface.
 Only `https://www.googleapis.com/auth/analytics.readonly` is requested. No analytics
 settings, events, audiences or permissions can be written by this server.
 
@@ -50,8 +51,9 @@ The bundle contains a fixed server version and lockfile, with no credentials.
 
 Once a release has been published, bundles will be available from
 [GitHub Releases](https://github.com/flin-agency/flin-ga4-mcp/releases).
-After the first PyPI release, `uvx flin-ga4-mcp@0.1.0` can replace the source-checkout command.
-These publication steps are separate from building the repository.
+For the published version, use `uvx flin-ga4-mcp@0.1.0` instead of the source-checkout command.
+Keep the same OAuth environment variables. The desktop bundle works on Apple Silicon and
+Intel Macs; Claude Desktop’s UV runtime selects the matching Python interpreter.
 
 ## Tools
 
@@ -120,7 +122,7 @@ before constructing unusual combinations.
 - `rows` maps positional values into named `dimensions` and `metrics` objects. Empty
   reports stay empty; the server does not invent zero values.
 - `rowCount` describes matching rows, not just this page. Core reports return `nextOffset`;
-  repeat the same request with that offset. Use deterministic sorting for pagination.
+  repeat the same request with that offset. The server adds dimension tie-breakers for deterministic pagination.
   The server caps calls at 10,000 rows to bound tool output. Reports can change as GA processes data.
 - `list_properties` pages **accounts**, not individual properties. Follow `nextPageToken`.
 - Realtime defaults to minutes 29 through 0 (30 minutes inclusive). Up to 59 minutes ago

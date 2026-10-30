@@ -157,6 +157,20 @@ def run_report(*, start_date: str, end_date: str, metrics: list[str],
     for key, value in (("dimensionFilter", dimension_filter), ("metricFilter", metric_filter), ("orderBys", order_bys)):
         if value is not None:
             body[key] = value
+    # Break metric ties by the complete dimension key so adjacent pages are stable.
+    # An explicit dimension ordering (including pivot ordering) always takes priority.
+    ordering = list(body.get("orderBys", []))
+    ordered_dimensions = {
+        item["dimension"]["dimensionName"] for item in ordering
+        if isinstance(item.get("dimension"), dict) and "dimensionName" in item["dimension"]
+    }
+    if not any("pivot" in item for item in ordering):
+        ordering.extend(
+            {"dimension": {"dimensionName": dimension["name"]}}
+            for dimension in body["dimensions"] if dimension["name"] not in ordered_dimensions
+        )
+    if ordering:
+        body["orderBys"] = ordering
     if currency_code is not None:
         if not re.fullmatch(r"[A-Z]{3}", currency_code):
             raise ValueError("currency_code must be a three-letter uppercase currency code.")

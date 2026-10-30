@@ -1,0 +1,82 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Secret scan
+        uses: docker://zricethezav/gitleaks:v8.28.0
+        with:
+          args: dir /github/workspace --redact --exit-code 1
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: python -m pip install uv
+      - run: uv sync --locked --extra dev
+      - run: npm ci --ignore-scripts
+      - run: uv run pytest
+      - run: uv run python -m compileall -q src
+      - run: uv build
+      - run: uv run twine check dist/*.whl dist/*.tar.gz
+      - name: Build and validate desktop bundle/version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          if [ "$REF_TYPE" = tag ]; then
+            uv run python scripts/build_mcpb.py --tag "$RELEASE_TAG"
+          else
+            uv run python scripts/build_mcpb.py
+          fi
+      - name: Smoke-test installed desktop bundle
+        run: uv run python scripts/check_mcpb.py dist/mcpb/*.mcpb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-artifacts
+          path: dist/
+          if-no-files-found: error
+  publish-pypi:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/flin-ga4-mcp
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-artifacts
+          path: dist/
+      - name: Remove desktop files from PyPI upload
+        run: rm -r dist/mcpb
+      - uses: pypa/gh-action-pypi-publish@release/v1
+  github-release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build, publish-pypi]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-artifacts
+          path: dist/
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: gh release create "$RELEASE_TAG" dist/*.whl dist/*.tar.gz dist/mcpb/* --verify-tag --generate-notes

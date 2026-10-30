@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling>=1.26.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "flin-ga4-mcp"
+version = "0.1.0"
+description = "Read-only Google Analytics 4 MCP server with local OAuth and multi-account support."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "flin GmbH", email = "flin@flin.agency" }]
+keywords = ["mcp", "ga4", "google-analytics", "analytics", "claude"]
+dependencies = [
+  "mcp>=1.12.0,<2",
+  "google-api-python-client>=2.170.0,<3",
+  "google-auth>=2.40.0,<3",
+  "google-auth-oauthlib>=1.2.0,<2",
+  "google-auth-httplib2>=0.2.0,<1",
+  "httplib2>=0.22.0,<1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0.0", "build>=1.2.2", "twine>=6", "tomli>=2.0.1; python_version < '3.11'"]
+
+[project.scripts]
+flin-ga4-mcp = "flin_ga4_mcp.server:main"
+
+[project.urls]
+Homepage = "https://github.com/flin-agency/flin-ga4-mcp"
+Repository = "https://github.com/flin-agency/flin-ga4-mcp"
+Issues = "https://github.com/flin-agency/flin-ga4-mcp/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/flin_ga4_mcp"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+pythonpath = [".", "src"]

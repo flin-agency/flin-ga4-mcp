@@ -1,0 +1,11 @@
+{
+  "name": "flin-ga4-mcp-build",
+  "private": true,
+  "description": "Build tooling for the Claude Desktop extension",
+  "devDependencies": {
+    "@anthropic-ai/mcpb": "2.1.2"
+  },
+  "overrides": {
+    "tmp": "^0.2.6"
+  }
+}

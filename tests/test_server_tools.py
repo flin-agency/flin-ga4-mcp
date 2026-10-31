@@ -17,7 +17,8 @@ from flin_ga4_mcp import server
 
 
 TOOLS = {'health_check', 'list_properties', 'get_property', 'get_metadata', 'check_compatibility',
-         'run_report', 'run_realtime_report', 'get_summary', 'get_traffic_sources', 'get_top_pages', 'get_events'}
+         'run_report', 'run_realtime_report', 'get_summary', 'get_traffic_sources', 'get_top_pages', 'get_events', 'get_property_configuration', 'list_property_annotations',
+         'batch_run_reports', 'run_funnel_report', 'search_change_history', 'run_access_report'}
 
 
 def test_health_without_config(monkeypatch):
@@ -89,3 +90,21 @@ def test_actual_stdio_protocol_and_tool_schemas(tmp_path):
                 assert invalid.isError
                 assert 'invalid_arguments' in invalid.content[0].text
     asyncio.run(check())
+
+
+@pytest.mark.parametrize('name,kwargs,hint', [
+    ('run_access_report', {'start_date': 'today', 'end_date': 'today', 'dimensions': ['userEmail'], 'metrics': ['accessCount']}, 'Administrator'),
+    ('search_change_history', {'ga_account_id': '123'}, 'Editor'),
+])
+def test_audit_permission_hints_are_sanitized(monkeypatch, name, kwargs, hint):
+    def fail(**kwargs):
+        raise HttpError(httplib2.Response({'status': '403'}), b'private-secret')
+    monkeypatch.setattr(server.analytics, name, fail)
+    with pytest.raises(ToolError, match=hint) as caught:
+        getattr(server, name)(**kwargs)
+    assert 'private-secret' not in str(caught.value)
+
+
+def test_desktop_manifest_matches_live_tool_inventory():
+    manifest = json.loads((Path(__file__).parents[1] / 'mcpb' / 'manifest.template.json').read_text())
+    assert {tool['name'] for tool in manifest['tools']} == TOOLS

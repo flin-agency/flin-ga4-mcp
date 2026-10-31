@@ -11,6 +11,10 @@ new directories use mode 0700 and files use mode 0600. On Windows, protection re
 user profile's filesystem permissions. Credentials are never intentionally returned in tool
 results; upstream error bodies are suppressed. The OS browser and Google handle sign-in.
 
+Requested configuration, annotations and audit results can include user email addresses,
+change authors and before/after settings. These are returned to the selected MCP client.
+Measurement Protocol secretValue fields in change history are redacted.
+
 Report data is processed in memory and returned to the MCP client, without a persistent report
 cache. Tokens remain until you delete the token file/directory documented in README.md.
 Uninstalling the server does not delete tokens. Revoke Google account app access as well if you

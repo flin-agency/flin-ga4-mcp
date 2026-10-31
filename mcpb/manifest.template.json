@@ -109,6 +109,30 @@
     {
       "name": "run_realtime_report",
       "description": "Read realtime activity."
+    },
+    {
+      "name": "get_property_configuration",
+      "description": "Read selected tracking, key event, custom definition, attribution and retention settings."
+    },
+    {
+      "name": "list_property_annotations",
+      "description": "Read dated reporting notes."
+    },
+    {
+      "name": "batch_run_reports",
+      "description": "Run up to five reports on one property."
+    },
+    {
+      "name": "run_funnel_report",
+      "description": "Analyse sequential funnels and drop-offs."
+    },
+    {
+      "name": "search_change_history",
+      "description": "Read configuration changes with appropriate Editor/Administrator access."
+    },
+    {
+      "name": "run_access_report",
+      "description": "Audit data access; requires Administrator."
     }
   ],
   "compatibility": {

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "flin-ga4-mcp"
-version = "0.1.0"
+version = "0.2.0"
 description = "Read-only Google Analytics 4 MCP server with local OAuth and multi-account support."
 readme = "README.md"
 requires-python = ">=3.10"

@@ -34,9 +34,9 @@ def wire(monkeypatch):
         def close(self):
             pass
 
-    def service(api, settings, account):
+    def service(api, settings, account, version="v1beta"):
         calls.append({'api': api, 'account': account})
-        return build(api, 'v1beta', http=Http(), static_discovery=True)
+        return build(api, version, http=Http(), static_discovery=True)
 
     monkeypatch.setattr(ga, '_service', service)
     return calls, response
@@ -192,3 +192,176 @@ def test_default_pagination_orders_by_all_dimensions(wire):
     assert wire[0][1]['body']['orderBys'] == [
         {'dimension': {'dimensionName': 'date'}}, {'dimension': {'dimensionName': 'country'}},
     ]
+
+
+@pytest.mark.parametrize('section,version,path', [
+    ('data_streams', 'v1beta', 'dataStreams'), ('key_events', 'v1beta', 'keyEvents'),
+    ('custom_dimensions', 'v1beta', 'customDimensions'), ('custom_metrics', 'v1beta', 'customMetrics'),
+    ('calculated_metrics', 'v1alpha', 'calculatedMetrics'),
+    ('attribution', 'v1alpha', 'attributionSettings'), ('data_retention', 'v1beta', 'dataRetentionSettings'),
+])
+def test_configuration_uses_read_endpoint(section, version, path, wire):
+    singleton = section in {'attribution', 'data_retention'}
+    result = ga.get_property_configuration(sections=[section], page_size=20,
+        page_tokens=None if singleton else {section: 'page2'}, account='work')
+    req = wire[0][1]
+    assert req['method'] == 'GET'
+    assert f'/{version}/properties/123456789/{path}' in req['uri']
+    assert ('pageToken=page2' in req['uri']) is not singleton
+    assert result['sections'][section]['status'] == 'ok'
+    assert result['partial'] is False
+
+
+def test_configuration_partial_permission_error_and_page_token(monkeypatch, wire):
+    from googleapiclient.errors import HttpError
+    import httplib2
+    original = ga._execute
+    def execute(api, settings, account, operation, version='v1beta'):
+        if version == 'v1alpha':
+            raise HttpError(httplib2.Response({'status': '403'}), b'private-secret')
+        return original(api, settings, account, operation, version)
+    monkeypatch.setattr(ga, '_execute', execute)
+    wire[1].update({'keyEvents': [{'eventName': 'purchase'}], 'nextPageToken': 'next'})
+    result = ga.get_property_configuration(sections=['attribution', 'key_events'])
+    assert result['partial'] is True
+    assert result['sections']['attribution']['status'] == 'permission_denied'
+    assert 'data' not in result['sections']['attribution']
+    assert result['sections']['key_events']['data']['nextPageToken'] == 'next'
+    assert 'private-secret' not in json.dumps(result)
+
+
+def test_annotations_alpha_filter_and_empty_page(wire):
+    wire[1]['nextPageToken'] = 'next'
+    result = ga.list_property_annotations(filter='title="Sale"', page_token='previous', account='work')
+    assert '/v1alpha/properties/123456789/reportingDataAnnotations' in wire[0][1]['uri']
+    assert 'filter=' in wire[0][1]['uri']
+    assert 'pageToken=previous' in wire[0][1]['uri']
+    assert result['reportingDataAnnotations'] == [] and result['nextPageToken'] == 'next'
+
+
+def test_batch_preserves_order_metadata_and_independent_offsets(wire):
+    wire[1]['reports'] = [
+        {'metricHeaders': [{'name': 'sessions'}], 'rows': [{'metricValues': [{'value': '9007199254740993'}]}],
+         'rowCount': 10, 'metadata': {'subjectToThresholding': True}, 'propertyQuota': {'tokensPerDay': {'remaining': 9}}},
+        {'rowCount': 0},
+    ]
+    result = ga.batch_run_reports(reports=[
+        {'start_date': '7daysAgo', 'end_date': 'yesterday', 'metrics': ['sessions'], 'limit': 1, 'offset': 2},
+        {'start_date': '14daysAgo', 'end_date': '8daysAgo', 'metrics': ['sessions']},
+    ], account='work')
+    assert len(wire[0]) == 2  # one service, one HTTP call
+    assert ':batchRunReports' in wire[0][1]['uri']
+    assert all(b['returnPropertyQuota'] for b in wire[0][1]['body']['requests'])
+    assert [r['reportIndex'] for r in result['reports']] == [0, 1]
+    assert [r['nextOffset'] for r in result['reports']] == [3, None]
+    assert result['reports'][0]['rows'][0]['metrics']['sessions'] == '9007199254740993'
+    assert result['reports'][0]['metadata']['subjectToThresholding'] is True
+    assert result['reports'][0]['propertyQuota'] == wire[1]['reports'][0]['propertyQuota']
+
+
+def test_batch_rejects_unexpected_response_count(wire):
+    with pytest.raises(RuntimeError):
+        ga.batch_run_reports(reports=[{'start_date': 'today', 'end_date': 'today', 'metrics': ['sessions']}])
+
+
+def test_history_uses_ga_account_and_redacts_secrets(wire):
+    wire[1].update({'changeHistoryEvents': [{'changes': [
+        {'resourceBefore': {'measurementProtocolSecret': {'secretValue': 'private-secret'}},
+         'resourceAfter': {'measurementProtocolSecret': {'secretValue': 'other-secret'}}}]}], 'nextPageToken': 'next'})
+    result = ga.search_change_history(ga_account_id='42', property_id='123', account='work',
+        earliest_change_time='2026-10-01T00:00:00Z', latest_change_time='2026-10-31T23:59:59+01:00',
+        actions=['UPDATED'], resource_types=['DATA_STREAM'], actor_emails=['editor@example.org'], page_token='prev')
+    req = wire[0][1]
+    assert '/v1beta/accounts/42:searchChangeHistoryEvents' in req['uri']
+    assert req['method'] == 'POST'
+    assert req['body']['property'] == 'properties/123'
+    assert req['body']['action'] == ['UPDATED'] and req['body']['pageToken'] == 'prev'
+    assert result['gaAccount'] == 'accounts/42' and result['account'] == 'work'
+    assert result['nextPageToken'] == 'next'
+    assert 'private-secret' not in json.dumps(result) and 'other-secret' not in json.dumps(result)
+    ga.search_change_history(ga_account_id='42')
+    assert 'property' not in wire[0][-1]['body']  # no implicit default-property restriction
+
+
+@pytest.mark.parametrize('ga_account_id', [None, 'accounts/42'])
+def test_access_schema_and_entity_quota(ga_account_id, wire):
+    wire[1].update({'dimensionHeaders': [{'dimensionName': 'userEmail'}],
+        'metricHeaders': [{'metricName': 'accessCount'}],
+        'rows': [{'dimensionValues': [{'value': 'reader@example.org'}], 'metricValues': [{'value': '12'}]}],
+        'rowCount': 5, 'quota': {'tokensPerHour': {'remaining': 100}}})
+    result = ga.run_access_report(start_date='7daysAgo', end_date='yesterday', dimensions=['userEmail'],
+        metrics=['accessCount'], ga_account_id=ga_account_id, account='work', limit=1, offset=1)
+    req = wire[0][1]
+    entity = ga_account_id or 'properties/123456789'
+    assert f'/v1beta/{entity}:runAccessReport' in req['uri']
+    assert req['body']['returnEntityQuota'] is (ga_account_id is None)
+    assert req['body']['dimensions'] == [{'dimensionName': 'userEmail'}]
+    assert req['body']['metrics'] == [{'metricName': 'accessCount'}]
+    assert req['body']['orderBys'] == [{'dimension': {'dimensionName': 'userEmail'}}]
+    assert result['rows'] == [{'dimensions': {'userEmail': 'reader@example.org'}, 'metrics': {'accessCount': '12'}}]
+    assert result['nextOffset'] == 2 and result['quota'] == wire[1]['quota']
+
+
+FUNNEL_STEPS = [{'name': 'Purchase', 'filterExpression': {'funnelEventFilter': {'eventName': 'purchase'}}}]
+
+
+def test_funnel_fixed_endpoint_nested_metadata_and_http_close(monkeypatch):
+    import httplib2
+    calls = []
+    subreport = {'dimensionHeaders': [{'name': 'funnelStepName'}],
+                 'metricHeaders': [{'name': 'activeUsers', 'type': 'TYPE_INTEGER'}],
+                 'rows': [{'dimensionValues': [{'value': '1. Purchase'}], 'metricValues': [{'value': '42'}]}],
+                 'metadata': {'samplingMetadatas': [{'samplesReadCount': '50', 'samplingSpaceSize': '100'}]}}
+    response = {'funnelTable': subreport, 'funnelVisualization': subreport, 'propertyQuota': {'remaining': 99}}
+    http = Mock()
+    def request(uri, method, body, headers, **kw):
+        calls.append((uri, method, json.loads(body)))
+        return httplib2.Response({'status': '200'}), json.dumps(response).encode()
+    http.request.side_effect = request
+    monkeypatch.setattr(ga, '_http', lambda settings, account: http)
+    result = ga.run_funnel_report(start_date='7daysAgo', end_date='yesterday', steps=FUNNEL_STEPS,
+        is_open_funnel=True, funnel_breakdown={'breakdownDimension': {'name': 'deviceCategory'}}, limit=1)
+    uri, method, body = calls[0]
+    assert uri == 'https://analyticsdata.googleapis.com/v1alpha/properties/123456789:runFunnelReport'
+    assert method == 'POST' and body['returnPropertyQuota'] is True
+    assert body['funnel'] == {'steps': FUNNEL_STEPS, 'isOpenFunnel': True}
+    assert result['funnelTable']['rows'][0]['metrics']['activeUsers'] == '42'
+    for key in ('funnelTable', 'funnelVisualization'):
+        assert result[key]['metadata'] == subreport['metadata']
+        assert result[key]['possiblyTruncated'] is True
+        assert 'rowCount' not in result[key]
+    assert result['propertyQuota'] == response['propertyQuota']
+    http.close.assert_called_once()
+
+
+def test_funnel_closes_transport_on_failure(monkeypatch):
+    http = Mock()
+    http.request.side_effect = TimeoutError()
+    monkeypatch.setattr(ga, '_http', lambda settings, account: http)
+    with pytest.raises(TimeoutError):
+        ga.run_funnel_report(start_date='today', end_date='today', steps=FUNNEL_STEPS)
+    http.close.assert_called_once()
+
+
+@pytest.mark.parametrize('function,kwargs', [
+    (ga.get_property_configuration, {'sections': []}),
+    (ga.get_property_configuration, {'sections': ['delete']}),
+    (ga.get_property_configuration, {'sections': ['key_events', 'key_events']}),
+    (ga.get_property_configuration, {'sections': ['attribution'], 'page_tokens': {'attribution': 'p'}}),
+    (ga.batch_run_reports, {'reports': []}),
+    (ga.batch_run_reports, {'reports': [{}] * 6}),
+    (ga.batch_run_reports, {'reports': [{'property_id': '2'}]}),
+    (ga.batch_run_reports, {'reports': [{'metrics': ['sessions']}]}),
+    (ga.batch_run_reports, {'reports': [{'start_date': 'today', 'end_date': 'today', 'metrics': ['sessions'], 'limit': 10001}]}),
+    (ga.search_change_history, {'ga_account_id': 'work'}),
+    (ga.search_change_history, {'ga_account_id': '42', 'earliest_change_time': 'yesterday'}),
+    (ga.search_change_history, {'ga_account_id': '42', 'earliest_change_time': '2026-10-31T00:00:00Z', 'latest_change_time': '2026-10-01T00:00:00Z'}),
+    (ga.run_funnel_report, {'start_date': 'today', 'end_date': 'today', 'steps': []}),
+    (ga.run_funnel_report, {'start_date': 'today', 'end_date': 'today', 'steps': FUNNEL_STEPS, 'segments': [{}] * 5}),
+    (ga.run_funnel_report, {'start_date': 'today', 'end_date': 'today', 'steps': FUNNEL_STEPS, 'property_id': '1/../../accounts'}),
+    (ga.run_access_report, {'start_date': 'today', 'end_date': 'today', 'metrics': ['accessCount'], 'dimensions': [], 'property_id': '1', 'ga_account_id': '2'}),
+])
+def test_extended_invalid_arguments_do_not_authenticate(function, kwargs, wire):
+    with pytest.raises(ValueError):
+        function(**kwargs)
+    assert not wire[0]

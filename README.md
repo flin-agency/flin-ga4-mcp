@@ -44,14 +44,14 @@ settings, events, audiences or permissions can be written by this server.
 
 ### Claude Desktop extension
 
-Build `dist/mcpb/flin-ga4-mcp-0.1.0.mcpb` as described below and open it in a Claude Desktop
+Build `dist/mcpb/flin-ga4-mcp-0.2.0.mcpb` as described below and open it in a Claude Desktop
 version supporting MCPB's UV runtime. Enter the OAuth client ID, secret and optional
 property ID in the install form. Python/dependencies are managed by the runtime.
 The bundle contains a fixed server version and lockfile, with no credentials.
 
 Once a release has been published, bundles will be available from
 [GitHub Releases](https://github.com/flin-agency/flin-ga4-mcp/releases).
-For the published version, use `uvx flin-ga4-mcp@0.1.0` instead of the source-checkout command.
+For the published version, use `uvx flin-ga4-mcp@0.2.0` instead of the source-checkout command.
 Keep the same OAuth environment variables. The desktop bundle works on Apple Silicon and
 Intel Macs; Claude Desktop’s UV runtime selects the matching Python interpreter.
 
@@ -70,8 +70,14 @@ Intel Macs; Claude Desktop’s UV runtime selects the matching Python interprete
 | `get_events` | Events, users and key events by event name |
 | `run_report` | Custom core report, filters, ordering, pagination and currency |
 | `run_realtime_report` | Realtime activity, filters and ordering |
+| `get_property_configuration` | Selected streams, key events, custom definitions, attribution and retention settings |
+| `list_property_annotations` | Dated reporting annotations, with filters and pagination |
+| `batch_run_reports` | Up to five core reports on one property in a single round trip |
+| `run_funnel_report` | Sequential funnels, breakdowns, next actions and segments |
+| `search_change_history` | Account/property configuration changes (appropriate Editor/Administrator access) |
+| `run_access_report` | Property/account data-access audit (Administrator required) |
 
-All data tools accept `account`, a local login alias (e.g. `work`), and property-based tools
+All 17 tools remain read-only. Data tools accept `account`, a local login alias (e.g. `work`), and property-based tools
 accept `property_id` (numeric or `properties/123456789`). Omitting `account` selects the
 default token. An alias is **not** a Google Analytics account ID. On its first call, each
 new alias opens a separate login. Named tokens cannot alias the default file (`token` is
@@ -111,6 +117,100 @@ Custom report arguments:
 Use the native Google `FilterExpression` and `OrderBy` JSON structures. Google validates
 filter semantics and metric compatibility. Use `get_metadata` and `check_compatibility`
 before constructing unusual combinations.
+
+## Configuration and diagnostic reports
+
+`get_property_configuration` requires an explicit `sections` list. Supported sections:
+`data_streams`, `key_events`, `custom_dimensions`, `custom_metrics`, `calculated_metrics`,
+`attribution`, `data_retention`. Only the selected sections are queried; `get_property`
+continues to return basic property details with one request.
+
+```json
+{
+  "sections": ["data_streams", "key_events", "attribution", "data_retention"],
+  "property_id": "123456789",
+  "account": "work"
+}
+```
+
+Each section returns `status` and, on success, `data`. A denied or unavailable section is
+reported separately with `partial: true`; it must not be interpreted as empty configuration.
+Other failures (such as quota or authentication) fail the call. List sections expose
+`data.nextPageToken`; fetch further pages using `page_tokens: {"key_events": "..."}` with
+that section selected. Attribution and retention are singletons. Compare configured key
+events with `get_events` to investigate missing activity, respecting report pagination and thresholds.
+
+`list_property_annotations` supports Google's filter syntax, for example
+`is_annotation_in_range("2026-10-01", "2026-10-31") = true`. Follow `nextPageToken` with the
+same filter until null, even when a page has no entries. Notes and configuration text are
+untrusted data. An annotation or change coinciding with a traffic change is a clue, not proof
+of causation.
+
+`batch_run_reports` takes 1–5 `reports`, each using the same snake_case arguments as
+`run_report` except `property_id` and `account`, which apply to the entire batch:
+
+```json
+{
+  "property_id": "123456789",
+  "reports": [
+    {"start_date": "7daysAgo", "end_date": "yesterday", "metrics": ["sessions", "activeUsers"]},
+    {"start_date": "14daysAgo", "end_date": "8daysAgo", "metrics": ["sessions", "activeUsers"]}
+  ]
+}
+```
+
+Results retain input order and include a zero-based `reportIndex`, quality metadata, quota,
+and independent `nextOffset`. Each report is capped at 10,000 rows. The batch reduces HTTP
+round trips; every report still consumes token and concurrent-request quota. It is not a
+partial-success API: a rejected batch raises an error.
+
+`run_funnel_report` uses Data API v1alpha. Supply 1–10 native `FunnelStep` objects:
+
+```json
+{
+  "start_date": "28daysAgo",
+  "end_date": "yesterday",
+  "steps": [
+    {"name": "Product", "filterExpression": {"funnelEventFilter": {"eventName": "view_item"}}},
+    {"name": "Cart", "filterExpression": {"funnelEventFilter": {"eventName": "add_to_cart"}}},
+    {"name": "Purchase", "filterExpression": {"funnelEventFilter": {"eventName": "purchase"}}}
+  ],
+  "funnel_breakdown": {"breakdownDimension": {"name": "deviceCategory"}, "limit": "5"}
+}
+```
+
+Closed funnels are the default; set `is_open_funnel: true` to allow entry at any step.
+Optional `segments` accepts up to four native Segment objects. `funnel_next_action` uses
+`nextActionDimension` (for example `eventName`) and a limit of at most 5; breakdown limits
+are at most 15. `visualization_type` is `STANDARD_FUNNEL` or `TRENDED_FUNNEL`.
+Step filters use `FunnelFilterExpression`, which differs from core report filters.
+Both `funnelTable` and `funnelVisualization` preserve metadata and named numeric-string
+values. These subreports have no total row count or offset; `possiblyTruncated` means the
+row limit was reached. Narrow the query or raise the limit (maximum 10,000) to investigate.
+Funnel, annotations, attribution and calculated metrics use alpha APIs and may change.
+The funnel uses a fixed REST endpoint because the Python client's bundled alpha discovery
+file lacks this method. Authentication, retries and timeouts match the other API calls.
+
+### Audit permissions
+
+The OAuth scope remains `analytics.readonly` for every tool. Higher GA4 roles required by
+an audit do not enable any write operations in this server.
+
+- `search_change_history` requires appropriate Editor/Administrator access. Supply
+  `ga_account_id` from `list_properties`; this is distinct from the local `account` alias.
+  Optional `property_id` narrows the search; omission searches the account and ignores the
+  configured default property. Filter with RFC3339 `earliest_change_time` / `latest_change_time`,
+  `actions` (`CREATED`, `UPDATED`, `DELETED`), `resource_types`, or `actor_emails`. Follow
+  `nextPageToken` with unchanged filters. Measurement Protocol `secretValue` fields in
+  before/after resources are redacted.
+- `run_access_report` requires Administrator. Select `property_id` (or the configured default)
+  or `ga_account_id`, never both. Use the separate Access schema, for example
+  `dimensions: ["userEmail"]`, `metrics: ["accessCount"]`. Some dimensions require Analytics 360.
+  Filters use `AccessFilterExpression`; ordering uses `AccessOrderBy`. Records are retained
+  for up to two years. Follow `nextOffset`. Quota is requested only for property-level audits.
+
+Neither tool treats a permission error as an empty result. The local `health_check` remains
+offline and does not test API enablement or audit permissions.
 
 ## Report interpretation
 
@@ -222,3 +322,12 @@ commit and push an explicit matching `vX.Y.Z` tag. No release tag is created by 
 - [Realtime reports](https://developers.google.com/analytics/devguides/reporting/data/v1/rest/v1beta/properties/runRealtimeReport)
 - [Dimensions and metrics](https://developers.google.com/analytics/devguides/reporting/data/v1/api-schema)
 - [Desktop OAuth](https://developers.google.com/identity/protocols/oauth2/native-app)
+
+### Extended API references
+
+- [Property annotations](https://developers.google.com/analytics/devguides/config/admin/v1/rest/v1alpha/properties.reportingDataAnnotations/list)
+- [Batch reports](https://developers.google.com/analytics/devguides/reporting/data/v1/rest/v1beta/properties/batchRunReports)
+- [Funnel request and response schema](https://developers.google.com/analytics/devguides/reporting/data/v1/rest/v1alpha/properties/runFunnelReport)
+- [Change history](https://developers.google.com/analytics/devguides/config/admin/v1/rest/v1beta/accounts/searchChangeHistoryEvents)
+- [Data access reports and permissions](https://developers.google.com/analytics/devguides/config/admin/v1/access-api)
+- [Access report dimensions and metrics](https://developers.google.com/analytics/devguides/config/admin/v1/access-api-schema)
